@@ -42,12 +42,13 @@ twilioRouter.post("/call", async (req, res) => {
  * Connects the call to our WebSocket media stream.
  */
 twilioRouter.all("/twiml", (req, res) => {
-  const streamUrl = `${config.serverUrl.replace("https://", "wss://")}/stream`;
+  const wsUrl = `${config.serverUrl.replace("https://", "wss://")}/stream`;
 
+  // Custom pipeline: we handle STT (Deepgram) + TTS (Cartesia) ourselves
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <Stream url="${streamUrl}" />
+    <Stream url="${wsUrl}" />
   </Connect>
 </Response>`;
 

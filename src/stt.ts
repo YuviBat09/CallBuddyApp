@@ -17,7 +17,7 @@ export class STT extends EventEmitter {
       encoding: "mulaw",
       sample_rate: 8000,
       channels: 1,
-      endpointing: 300,       // ms of silence = end of utterance
+      endpointing: 150,       // ms of silence = end of utterance
       interim_results: false, // only final results
       smart_format: true,
     });

@@ -6,14 +6,16 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "test:pipeline": "tsx scripts/test-pipeline.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.36.3",
     "@deepgram/sdk": "^3.9.0",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
-"openai": "^4.85.2",
+    "googleapis": "^171.4.0",
+    "openai": "^4.85.2",
     "twilio": "^5.4.5",
     "ws": "^8.18.0"
   },

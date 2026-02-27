@@ -1,31 +1,26 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { EventEmitter } from "events";
 import { config } from "./config.js";
 
-const SENTENCE_END = /[.!?]\s/;
-
-const SYSTEM_PROMPT = `You are a friendly, concise AI phone assistant named Buddy.
-Keep every response to 1–2 short sentences. Never use lists or markdown.
+const SYSTEM_PROMPT = `You are a calm, patient AI phone assistant named Buddy.
+Keep every response to 1 short sentence — 15 words maximum. Never use lists or markdown.
+Do NOT use filler affirmations like "Awesome", "Great", "Sure!", "Of course", "I'm all ears", or "I'm still listening".
+Only speak when you have something genuinely useful to say. If the user is mid-thought, wait.
 Speak naturally as if in a real phone conversation.`;
 
-/**
- * Wraps Claude streaming.
- * Emits:
- *   "sentence" (text: string) — a complete sentence ready for TTS
- *   "done" () — LLM response fully streamed
- */
-export class LLM extends EventEmitter {
+export class LLM {
   private client = new Anthropic({ apiKey: config.anthropic.apiKey });
   private history: Array<{ role: "user" | "assistant"; content: string }> = [];
 
-  async respond(userText: string) {
+  /**
+   * Stream the response to userText as raw text tokens.
+   * Caller pipes tokens directly to TTS — no sentence boundary wait.
+   */
+  async *stream(userText: string): AsyncGenerator<string> {
     this.history.push({ role: "user", content: userText });
-
-    let buffer = "";
     let fullResponse = "";
 
     const stream = this.client.messages.stream({
-      model: "claude-sonnet-4-6",
+      model: "claude-haiku-4-5-20251001",
       max_tokens: 150,
       system: SYSTEM_PROMPT,
       messages: this.history,
@@ -36,32 +31,13 @@ export class LLM extends EventEmitter {
         event.type === "content_block_delta" &&
         event.delta.type === "text_delta"
       ) {
-        const chunk = event.delta.text;
-        buffer += chunk;
-        fullResponse += chunk;
-
-        // Fire TTS as soon as we have a complete sentence
-        const match = buffer.search(SENTENCE_END);
-        if (match !== -1) {
-          const sentence = buffer.slice(0, match + 1).trim();
-          buffer = buffer.slice(match + 2);
-          if (sentence) {
-            console.log(`[LLM] Sentence ready: "${sentence}"`);
-            this.emit("sentence", sentence);
-          }
-        }
+        const token = event.delta.text;
+        fullResponse += token;
+        yield token;
       }
     }
 
-    // Emit any remaining text as a final sentence
-    const remainder = buffer.trim();
-    if (remainder) {
-      console.log(`[LLM] Final sentence: "${remainder}"`);
-      this.emit("sentence", remainder);
-    }
-
     this.history.push({ role: "assistant", content: fullResponse });
-    this.emit("done");
   }
 
   resetHistory() {

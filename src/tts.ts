@@ -1,87 +1,121 @@
-import OpenAI from "openai";
+import WebSocket from "ws";
 import { config } from "./config.js";
 
-const client = new OpenAI({ apiKey: config.openai.apiKey });
-
-// Twilio requires μ-law 8kHz. OpenAI TTS returns PCM at 24kHz.
-// We downsample 24kHz → 8kHz (factor of 3) then encode to μ-law.
-
-/** Downsample 24kHz signed 16-bit PCM → 8kHz by taking every 3rd sample */
-function downsample24to8(pcm24: Buffer): Buffer {
-  const factor = 3;
-  const outSamples = Math.floor(pcm24.length / 2 / factor);
-  const out = Buffer.alloc(outSamples * 2);
-  for (let i = 0; i < outSamples; i++) {
-    const sample = pcm24.readInt16LE(i * factor * 2);
-    out.writeInt16LE(sample, i * 2);
-  }
-  return out;
-}
-
-/** Encode signed 16-bit PCM to μ-law bytes */
-function pcm16ToMulaw(pcm: Buffer): Buffer {
-  const out = Buffer.alloc(pcm.length / 2);
-  for (let i = 0; i < out.length; i++) {
-    const sample = pcm.readInt16LE(i * 2);
-    out[i] = linearToMulaw(sample);
-  }
-  return out;
-}
-
-function linearToMulaw(sample: number): number {
-  const MULAW_BIAS = 33;
-  const MULAW_CLIP = 32635;
-
-  let sign = 0;
-  if (sample < 0) {
-    sign = 0x80;
-    sample = -sample;
-  }
-  if (sample > MULAW_CLIP) sample = MULAW_CLIP;
-  sample += MULAW_BIAS;
-
-  let exponent = 7;
-  for (let expMask = 0x4000; (sample & expMask) === 0 && exponent > 0; exponent--, expMask >>= 1) {}
-  const mantissa = (sample >> (exponent + 3)) & 0x0f;
-  return ~(sign | (exponent << 4) | mantissa) & 0xff;
-}
+const MODEL_ID = "sonic-2";
+// Cartesia voice: "Blake - Helpful Agent" — natural male, built for conversation
+const VOICE_ID = "a167e0f3-df7e-4d52-a9c3-f949145efdab";
 
 /**
- * Stream text → μ-law 8kHz chunks as they arrive from OpenAI.
- * Yields Buffer chunks suitable for sending directly to Twilio.
- * First chunk arrives ~150-250ms after call (vs 2000ms+ waiting for full response).
+ * One Cartesia Sonic streaming TTS session.
+ * Send text tokens with send(), signal end with finish().
+ * Consume μ-law 8kHz audio with audioChunks().
+ *
+ * Uses context continuation — tokens stream in as LLM produces them,
+ * audio starts arriving before the full response is generated.
  */
-export async function* streamTextToMulaw(text: string): AsyncGenerator<Buffer> {
-  const t0 = Date.now();
+export class CartesiaSession {
+  private ws: WebSocket;
+  private queue: Buffer[] = [];
+  private isDone = false;
+  private pendingResolve: (() => void) | null = null;
+  private contextId = Math.random().toString(36).slice(2);
+  private wsReady = false;
+  private pending: Array<{ text: string; cont: boolean }> = [];
 
-  const response = await client.audio.speech.create({
-    model: "tts-1",
-    voice: "alloy",
-    input: text,
-    response_format: "pcm", // raw 24kHz signed 16-bit PCM
-  });
+  constructor() {
+    this.ws = new WebSocket("wss://api.cartesia.ai/tts/websocket", {
+      headers: {
+        "X-API-Key": config.cartesia.apiKey,
+        "Cartesia-Version": "2024-11-13",
+      },
+    });
 
-  // 24kHz → 8kHz: 3 input samples per output sample = 6 bytes per output sample
-  const FRAME = 6;
-  let carry = Buffer.alloc(0);
-  let firstChunk = true;
+    this.ws.on("open", () => {
+      this.wsReady = true;
+      for (const { text, cont } of this.pending) this._send(text, cont);
+      this.pending = [];
+    });
 
-  for await (const raw of response.body as AsyncIterable<Uint8Array>) {
-    if (firstChunk) {
-      console.log(`[TTS] First chunk in ${Date.now() - t0}ms — "${text.slice(0, 40)}"`);
-      firstChunk = false;
-    }
-    const chunk = Buffer.concat([carry, Buffer.from(raw)]);
-    const usable = Math.floor(chunk.length / FRAME) * FRAME;
-    carry = chunk.subarray(usable);
-    if (usable > 0) {
-      yield pcm16ToMulaw(downsample24to8(chunk.subarray(0, usable)));
+    this.ws.on("message", (data: WebSocket.RawData) => {
+      try {
+        const msg = JSON.parse(data.toString()) as {
+          type?: string;
+          data?: string;
+          done?: boolean;
+          error?: string;
+        };
+        if (msg.error) console.error("[TTS] Cartesia error:", msg.error);
+        if (msg.data) {
+          this.queue.push(Buffer.from(msg.data, "base64"));
+          this._notify();
+        }
+        if (msg.type === "done" || msg.done) {
+          this.isDone = true;
+          this.ws.close(1000);
+          this._notify();
+        }
+      } catch { /* ignore parse errors */ }
+    });
+
+    this.ws.on("close", (code) => {
+      if (code !== 1000 && code !== 1005) console.error(`[TTS] Cartesia WS closed: ${code}`);
+      this.isDone = true;
+      this._notify();
+    });
+
+    this.ws.on("error", (err) => {
+      console.error("[TTS] Cartesia WS error:", err);
+      this.isDone = true;
+      this._notify();
+    });
+  }
+
+  /** Stream a text token. continue=true means more is coming. */
+  send(text: string, cont = true) {
+    if (this.wsReady) this._send(text, cont);
+    else this.pending.push({ text, cont });
+  }
+
+  /** Signal no more text — flushes remaining audio. */
+  finish() {
+    this.send("", false);
+  }
+
+  /** Terminate early (on interrupt). */
+  close() {
+    this.isDone = true;
+    this._notify();
+    try { this.ws.close(1000); } catch { /* ignore */ }
+  }
+
+  /** Async generator yielding μ-law 8kHz audio chunks. */
+  async *audioChunks(): AsyncGenerator<Buffer> {
+    while (true) {
+      while (this.queue.length > 0) yield this.queue.shift()!;
+      if (this.isDone) break;
+      await new Promise<void>(r => { this.pendingResolve = r; });
     }
   }
 
-  // Flush any remaining bytes
-  if (carry.length >= 2) {
-    const usable = carry.length - (carry.length % 2);
-    if (usable > 0) yield pcm16ToMulaw(downsample24to8(carry.subarray(0, usable)));
+  private _send(text: string, cont: boolean) {
+    try {
+      this.ws.send(JSON.stringify({
+        model_id: MODEL_ID,
+        transcript: text,
+        voice: { mode: "id", id: VOICE_ID },
+        output_format: { container: "raw", encoding: "pcm_mulaw", sample_rate: 8000 },
+        context_id: this.contextId,
+        continue: cont,
+        speed: 1.3,
+      }));
+    } catch { /* WS closed */ }
+  }
+
+  private _notify() {
+    if (this.pendingResolve) {
+      const r = this.pendingResolve;
+      this.pendingResolve = null;
+      r();
+    }
   }
 }

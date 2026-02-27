@@ -27,4 +27,8 @@ export const config = {
   deepgram: {
     apiKey: require_env("DEEPGRAM_API_KEY"),
   },
+
+  cartesia: {
+    apiKey: require_env("CARTESIA_API_KEY"),
+  },
 } as const;
