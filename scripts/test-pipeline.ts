@@ -18,8 +18,8 @@ if (!existsSync(OUT)) mkdirSync(OUT);
 const SYSTEM = `You are Buddy, a concise AI phone assistant. Maximum 1 sentence, 15 words. No markdown or lists.`;
 
 const MODELS = [
-  { id: "claude-haiku-4-5-20251001", label: "haiku",     provider: "anthropic" as const },
-  { id: "gpt-4o-mini",               label: "gpt4o-mini", provider: "openai"    as const },
+  { id: "llama-3.3-70b-versatile",   label: "groq-llama", provider: "groq"     as const },
+  { id: "claude-haiku-4-5-20251001", label: "haiku",      provider: "anthropic" as const },
 ];
 
 const VOICES = [
@@ -34,11 +34,23 @@ const PROMPTS = [
 
 // ── LLM streaming ─────────────────────────────────────────────────────────────
 
+const groqClient = new OpenAI({
+  apiKey: process.env.GROQ_API_KEY!,
+  baseURL: "https://api.groq.com/openai/v1",
+});
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
-const openai    = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
 async function* streamLLM(model: typeof MODELS[0], prompt: string): AsyncGenerator<string> {
-  if (model.provider === "anthropic") {
+  if (model.provider === "groq") {
+    const stream = await groqClient.chat.completions.create({
+      model: model.id, max_tokens: 80, stream: true,
+      messages: [{ role: "system", content: SYSTEM }, { role: "user", content: prompt }],
+    });
+    for await (const chunk of stream) {
+      const token = chunk.choices[0]?.delta?.content ?? "";
+      if (token) yield token;
+    }
+  } else {
     const stream = anthropic.messages.stream({
       model: model.id, max_tokens: 80, system: SYSTEM,
       messages: [{ role: "user", content: prompt }],
@@ -47,15 +59,6 @@ async function* streamLLM(model: typeof MODELS[0], prompt: string): AsyncGenerat
       if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
         yield event.delta.text;
       }
-    }
-  } else {
-    const stream = await openai.chat.completions.create({
-      model: model.id, max_tokens: 80, stream: true,
-      messages: [{ role: "system", content: SYSTEM }, { role: "user", content: prompt }],
-    });
-    for await (const chunk of stream) {
-      const token = chunk.choices[0]?.delta?.content ?? "";
-      if (token) yield token;
     }
   }
 }

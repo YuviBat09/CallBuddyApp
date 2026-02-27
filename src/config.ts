@@ -16,8 +16,8 @@ export const config = {
     phoneNumber: require_env("TWILIO_PHONE_NUMBER"),
   },
 
-  anthropic: {
-    apiKey: require_env("ANTHROPIC_API_KEY"),
+  groq: {
+    apiKey: require_env("GROQ_API_KEY"),
   },
 
   openai: {

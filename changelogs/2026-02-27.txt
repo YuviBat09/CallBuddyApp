@@ -1,0 +1,116 @@
+CALLBUDDY — CHANGELOG
+Date: 27 February 2026
+================================================================================
+
+OVERVIEW
+--------
+Full day of active development. Started with a Twilio ConversationRelay
+architecture and ended the day with a custom pipeline using Groq (Llama 3.3 70B),
+Cartesia Sonic 3, and Deepgram Nova-2, achieving sub-250ms LLM first token latency.
+
+
+WHAT WE DID & WHY
+-----------------
+
+1. FIXED /twiml 404 (early session, carried forward)
+   - Twilio makes POST requests to the TwiML URL, we only had GET.
+   - Fix: changed router.get → router.all.
+
+2. SWITCHED TTS FROM OPENAI → DEEPGRAM AURA → ELEVENLABS → CARTESIA
+   - OpenAI TTS: 2400ms first chunk. Too slow.
+   - Deepgram Aura: 238ms first chunk but robotic voice quality.
+   - ElevenLabs WebSocket: Better voice, ~939ms, but still robotic at 8kHz.
+   - ElevenLabs via ConversationRelay: Twilio handles TTS natively, simpler code.
+   - Cartesia Sonic 3: Chosen after research showed this is what Retell/Vapi use.
+     Human-quality voice, 90ms TTFA, purpose-built for real-time conversation.
+
+3. SWITCHED ARCHITECTURE: ConversationRelay → Custom Pipeline
+   - ConversationRelay limited us to Twilio-supported TTS providers (no Cartesia).
+   - Rebuilt: Twilio Media Streams → Deepgram STT → LLM → Cartesia → μ-law audio.
+   - More complex (~150 lines vs ~60) but unlocks best-in-class components.
+
+4. SWITCHED LLM: Claude Haiku → Groq Llama 3.3 70B
+   - Haiku first token: ~650-750ms.
+   - Ran automated pipeline tests (npm run test:pipeline): Groq vs Haiku vs GPT-4o-mini.
+   - Results from NZ: Haiku beat GPT-4o-mini (1487ms avg). Groq not yet tested at time.
+   - Switched to Groq (OpenAI-compatible, uses existing openai SDK).
+   - Groq first token in live calls: 168-184ms. Target <900ms now comfortably met.
+
+5. ADDED MOBILE WEB UI
+   - Problem: no way to control or monitor calls from phone.
+   - Built: dark-themed mobile UI at GET / with live SSE log stream.
+   - Features: Call button, Instructions tab, System Logs tab, per-call dividers.
+   - "okay claude, [instruction]" spoken on the call appears in Instructions tab.
+
+6. ADDED LATENCY TRACKING
+   - Every call turn logged to latency.csv: timestamp, call SID, user text,
+     LLM model, first token ms, last token ms, total ms, interrupted flag.
+   - Per-layer logging in server output: STT→LLM, LLM stream, Cartesia, total.
+
+7. ADDED INSTRUCTION CAPTURE SYSTEM
+   - Saying "okay claude, [change request]" on the phone logs it to the UI.
+   - Regex handles STT punctuation variations: "Okay. Claude," / "Okay, Claude,".
+
+8. CARTESIA PRE-WARMING
+   - Problem: each response created a new Cartesia WS (connection overhead).
+   - Fix: pre-warm the next session while current one is playing.
+   - warmTts always has a ready connection for the next response.
+
+9. STT ENDPOINTING TUNED: 300ms → 200ms → 150ms
+   - Each reduction saves that much time per turn before LLM fires.
+   - 150ms is current sweet spot — lower risks cutting off speech.
+
+10. AUTOMATED PIPELINE TEST SCRIPT
+    - scripts/test-pipeline.ts — tests LLM × voice combinations.
+    - Saves WAV audio files to test-output/ for listening review.
+    - Generates results.csv with latency breakdown per combination.
+    - Run: npm run test:pipeline
+
+11. WORD-BOUNDARY TOKEN BUFFERING
+    - Problem: sending individual subword tokens to Cartesia one-by-one adds overhead.
+    - Fix: buffer until space/punctuation, then flush whole words.
+
+12. BATRA INDUSTRIES ANALYTICS (new project, started end of day)
+    - New project: command centre tracking all tools, spending, and latency.
+    - Stark Industries aesthetic: dark theme, electric blue, scanlines.
+    - Reads CallBuddy's latency.csv in real-time, displays stats on dashboard.
+    - Running on port 4000.
+
+
+CURRENT STACK
+-------------
+  Phone:       Twilio (Media Streams, μ-law 8kHz)
+  STT:         Deepgram Nova-2 (150ms endpointing)
+  LLM:         Groq Llama 3.3 70B (~170ms first token)
+  TTS:         Cartesia Sonic 3, Blake voice, 1.3x speed
+  Server:      Node.js + TypeScript + Express + ws
+  Analytics:   Batra Industries (port 4000)
+
+
+LATENCY PROGRESS (speech-end → caller hears)
+---------------------------------------------
+  Start of day:   ~2800ms  (OpenAI TTS, Claude Sonnet)
+  Mid day:        ~1200ms  (ElevenLabs WS, Claude Haiku)
+  ConversationRelay: ~1200ms (Twilio STT/TTS, Claude Haiku)
+  End of day:     ~220ms   (Groq + Cartesia, custom pipeline)
+
+
+REMAINING / BACKLOG
+-------------------
+  [ ] Voicemail detection — bot currently responds to voicemail prompts
+  [ ] GitHub issue for High Latency (gh CLI not installed, create manually)
+  [ ] Batra Industries: cost tracking with real API billing data
+  [ ] Batra Industries: GitHub repo + multi-tool support
+  [ ] Test Cartesia pre-warming improvement in live call
+  [ ] Consider Groq rate limits at scale (free tier: 30 req/min)
+
+
+COST ESTIMATES PER CALL (5 min)
+--------------------------------
+  Groq Llama 3.3 70B:  ~$0.001  (very cheap)
+  Cartesia Sonic 3:    ~$0.10   ($0.02/min)
+  Deepgram Nova-2:     ~$0.03   ($0.0059/min)
+  Twilio:              ~$0.07   ($0.014/min)
+  Total per call:      ~$0.20
+
+================================================================================

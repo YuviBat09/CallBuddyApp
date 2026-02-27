@@ -5,6 +5,8 @@ import { LLM } from "./llm.js";
 import { CartesiaSession } from "./tts.js";
 
 const CSV_PATH = "./latency.csv";
+const LLM_MODEL = "groq-llama-3.3-70b";
+
 if (!existsSync(CSV_PATH)) {
   appendFileSync(CSV_PATH,
     "timestamp,call_sid,user_text,llm_model,ms_speech_to_first_token,ms_speech_to_last_token,ms_total_response,interrupted\n"
@@ -17,7 +19,7 @@ function appendLatency(row: {
 }) {
   const esc = (s: string) => `"${s.replace(/"/g, '""')}"`;
   appendFileSync(CSV_PATH,
-    [new Date().toISOString(), esc(row.callSid), esc(row.userText), "claude-haiku-4-5",
+    [new Date().toISOString(), esc(row.callSid), esc(row.userText), LLM_MODEL,
       row.msFirstToken, row.msLastToken, row.msTotal, row.interrupted ? 1 : 0].join(",") + "\n"
   );
 }
@@ -37,9 +39,17 @@ export function handleMediaStream(ws: WebSocket) {
   let currentTts: CartesiaSession | null = null;
   let isResponding = false;
 
+  // Pre-warm a Cartesia WS so it's ready before we need it.
+  // When consumed, immediately create the next warm session.
+  let warmTts: CartesiaSession = new CartesiaSession();
+  function getNextTts(): CartesiaSession {
+    const session = warmTts;
+    warmTts = new CartesiaSession(); // pre-warm next immediately
+    return session;
+  }
+
   // ── STT → LLM → TTS pipeline ──────────────────────────────────────────────
   stt.on("transcript", async (text: string) => {
-    // Interrupt any in-progress response
     if (isResponding && currentTts) {
       currentTts.close();
       currentTts = null;
@@ -53,10 +63,7 @@ export function handleMediaStream(ws: WebSocket) {
     const t0 = Date.now();
     console.log(`[PIPELINE] User: "${text}"`);
 
-    // Layer 1: LLM connect + first token
-    const ttsCreatedAt = Date.now();
-    const tts = new CartesiaSession();
-    const ttsInitMs = Date.now() - ttsCreatedAt;
+    const tts = getNextTts(); // pre-warmed — WS already open
     currentTts = tts;
     void pipeAudio(tts, t0);
 
@@ -74,18 +81,16 @@ export function handleMediaStream(ws: WebSocket) {
           msLlmConnect = Date.now() - t0;
           msFirstToken = msLlmConnect;
           console.log(`[LAYER] STT→LLM first token:  ${msLlmConnect}ms`);
-          console.log(`[LAYER] Cartesia WS init:      ${ttsInitMs}ms (parallel)`);
           firstToken = false;
         }
         fullText += token;
         wordBuf += token;
-        // Flush to Cartesia on word boundaries — avoids sending subword fragments
         if (/[\s,.!?;]/.test(token)) {
           tts.send(wordBuf, true);
           wordBuf = "";
         }
       }
-      if (wordBuf) tts.send(wordBuf, true); // flush remainder
+      if (wordBuf) tts.send(wordBuf, true);
       msLastToken = Date.now() - t0;
       console.log(`[LAYER] LLM full response:     ${msLastToken - msLlmConnect}ms  (${msLastToken}ms total)`);
     } catch (err) {
@@ -111,10 +116,8 @@ export function handleMediaStream(ws: WebSocket) {
     for await (const chunk of tts.audioChunks()) {
       if (tts !== currentTts) break;
       if (firstChunk) {
-        const msAudio = Date.now() - t0;
-        console.log(`[LAYER] First token→first audio: (Cartesia) ~${msAudio}ms total`);
-        console.log(`[LAYER] ─────────────────────────────────────`);
-        console.log(`[LAYER] TOTAL speech→caller hears: ~${msAudio}ms`);
+        const ms = Date.now() - t0;
+        console.log(`[LAYER] TOTAL speech→caller hears: ~${ms}ms`);
         firstChunk = false;
       }
       if (ws.readyState === WebSocket.OPEN) {
@@ -123,9 +126,9 @@ export function handleMediaStream(ws: WebSocket) {
     }
   }
 
-  // ── Play greeting on connect ───────────────────────────────────────────────
+  // ── Greeting ───────────────────────────────────────────────────────────────
   function sendGreeting() {
-    const tts = new CartesiaSession();
+    const tts = getNextTts();
     currentTts = tts;
     void pipeAudio(tts, Date.now());
     tts.send(GREETING, false);
@@ -134,12 +137,10 @@ export function handleMediaStream(ws: WebSocket) {
   // ── Twilio Media Stream events ─────────────────────────────────────────────
   ws.on("message", (data: WebSocket.RawData) => {
     const msg = JSON.parse(data.toString()) as Record<string, unknown>;
-
     switch (msg.event as string) {
       case "connected":
         console.log("[RELAY] Media stream connected");
         break;
-
       case "start": {
         const start = msg.start as Record<string, string>;
         streamSid = start.streamSid;
@@ -150,18 +151,16 @@ export function handleMediaStream(ws: WebSocket) {
         sendGreeting();
         break;
       }
-
       case "media": {
-        const media = (msg.media as Record<string, string>);
-        const audio = Buffer.from(media.payload, "base64");
+        const audio = Buffer.from((msg.media as Record<string, string>).payload, "base64");
         stt.send(audio);
         break;
       }
-
       case "stop":
         console.log("[RELAY] Call ended");
         stt.stop();
         currentTts?.close();
+        warmTts.close();
         break;
     }
   });
@@ -170,6 +169,7 @@ export function handleMediaStream(ws: WebSocket) {
     console.log("[RELAY] WebSocket closed");
     stt.stop();
     currentTts?.close();
+    warmTts.close();
   });
   ws.on("error", (err) => console.error("[RELAY] WS error:", err));
 }
