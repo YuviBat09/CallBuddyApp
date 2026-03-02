@@ -2,10 +2,10 @@ import WebSocket from "ws";
 import { appendFileSync, existsSync } from "fs";
 import { STT } from "./stt.js";
 import { LLM } from "./llm.js";
-import { CartesiaSession } from "./tts.js";
+import { ElevenLabsSession } from "./tts.js";
 
 const CSV_PATH = "./latency.csv";
-const LLM_MODEL = "groq-llama-3.1-8b-instant";
+const LLM_MODEL = "groq-llama-3.1-8b+elevenlabs-flash-v2.5";
 
 if (!existsSync(CSV_PATH)) {
   appendFileSync(CSV_PATH,
@@ -36,15 +36,15 @@ export function handleMediaStream(ws: WebSocket) {
   const stt = new STT();
   let streamSid = "";
   let callSid = "unknown";
-  let currentTts: CartesiaSession | null = null;
+  let currentTts: ElevenLabsSession | null = null;
   let isResponding = false;
 
   // Pre-warm a Cartesia WS so it's ready before we need it.
   // When consumed, immediately create the next warm session.
-  let warmTts: CartesiaSession = new CartesiaSession();
-  function getNextTts(): CartesiaSession {
+  let warmTts: ElevenLabsSession = new ElevenLabsSession();
+  function getNextTts(): ElevenLabsSession {
     const session = warmTts;
-    warmTts = new CartesiaSession(); // pre-warm next immediately
+    warmTts = new ElevenLabsSession(); // pre-warm next immediately
     return session;
   }
 
@@ -117,7 +117,7 @@ export function handleMediaStream(ws: WebSocket) {
   });
 
   // ── Pipe Cartesia audio → Twilio ───────────────────────────────────────────
-  async function pipeAudio(tts: CartesiaSession, t0: number) {
+  async function pipeAudio(tts: ElevenLabsSession, t0: number) {
     let firstChunk = true;
     for await (const chunk of tts.audioChunks()) {
       if (tts !== currentTts) break;

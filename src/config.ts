@@ -29,6 +29,10 @@ export const config = {
   },
 
   cartesia: {
-    apiKey: require_env("CARTESIA_API_KEY"),
+    apiKey: process.env.CARTESIA_API_KEY ?? "",
+  },
+
+  elevenlabs: {
+    apiKey: require_env("ELEVENLABS_API_KEY"),
   },
 } as const;
