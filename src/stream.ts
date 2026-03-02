@@ -67,6 +67,12 @@ export function handleMediaStream(ws: WebSocket) {
     currentTts = tts;
     void pipeAudio(tts, t0);
 
+    // Fire a filler sound immediately — plays while LLM generates, kills dead air
+    const FILLERS = ["Uhh, ", "Um, ", "Hmm, ", "Mm, ", "Uh, "];
+    if (Math.random() < 0.7) {
+      tts.send(FILLERS[Math.floor(Math.random() * FILLERS.length)], true);
+    }
+
     let firstToken = true;
     let fullText = "";
     let wordBuf = "";
