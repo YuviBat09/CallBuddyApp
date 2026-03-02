@@ -1,9 +1,12 @@
 import express, { Request, Response } from "express";
 import { createServer } from "http";
 import { WebSocketServer } from "ws";
+import { readFileSync, existsSync } from "fs";
 import { config } from "./config.js";
 import { twilioRouter } from "./twilio.js";
 import { handleMediaStream } from "./stream.js";
+
+const LATENCY_CSV = "./latency.csv";
 
 // --- SSE log broadcast ---
 const sseClients = new Set<Response>();
@@ -201,6 +204,26 @@ app.get("/logs", (req: Request, res: Response) => {
 
 // Health check
 app.get("/health", (_req: Request, res: Response) => res.json({ ok: true }));
+
+// Latency data — read by BatraIndustries analytics
+app.get("/api/latency", (_req: Request, res: Response) => {
+  if (!existsSync(LATENCY_CSV)) return res.json([]);
+  const lines = readFileSync(LATENCY_CSV, "utf8").trim().split("\n").slice(1);
+  const rows = lines.map(line => {
+    const [timestamp, callSid, userText, llmModel, msFirstToken, msLastToken, msTotal, interrupted] = line.split(",");
+    return {
+      timestamp: timestamp ?? "",
+      callSid: (callSid ?? "").replace(/"/g, ""),
+      userText: (userText ?? "").replace(/"/g, ""),
+      llmModel: llmModel ?? "",
+      msFirstToken: parseInt(msFirstToken ?? "0"),
+      msLastToken: parseInt(msLastToken ?? "0"),
+      msTotal: parseInt(msTotal ?? "0"),
+      interrupted: interrupted?.trim() === "1",
+    };
+  }).filter(r => r.timestamp);
+  res.json(rows);
+});
 
 // Twilio routes
 app.use("/", twilioRouter);
