@@ -20,19 +20,11 @@ export const config = {
     apiKey: require_env("GROQ_API_KEY"),
   },
 
-  openai: {
-    apiKey: require_env("OPENAI_API_KEY"),
-  },
-
   deepgram: {
     apiKey: require_env("DEEPGRAM_API_KEY"),
   },
 
   cartesia: {
-    apiKey: process.env.CARTESIA_API_KEY ?? "",
-  },
-
-  elevenlabs: {
-    apiKey: require_env("ELEVENLABS_API_KEY"),
+    apiKey: require_env("CARTESIA_API_KEY"),
   },
 } as const;
