@@ -2,9 +2,13 @@ import express, { Request, Response } from "express";
 import { createServer } from "http";
 import { WebSocketServer } from "ws";
 import { readFileSync, existsSync } from "fs";
+import session from "express-session";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
 import { config } from "./config.js";
 import { twilioRouter } from "./twilio.js";
 import { handleMediaStream } from "./stream.js";
+import { requireAuth } from "./auth.js";
 
 const LATENCY_CSV = "./latency.csv";
 
@@ -185,15 +189,85 @@ const HTML = `<!DOCTYPE html>
 </body>
 </html>`;
 
+const LOGIN_HTML = `<!DOCTYPE html><html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CallBuddy</title>
+<style>*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#0f0f0f;color:#e0e0e0;
+     min-height:100dvh;display:flex;align-items:center;justify-content:center}
+.card{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:12px;padding:36px 32px;width:100%;max-width:360px}
+h1{font-size:1.2rem;color:#fff;margin-bottom:6px;text-align:center}
+p.sub{font-size:.78rem;color:#555;text-align:center;margin-bottom:28px}
+input{width:100%;background:#111;border:1px solid #2a2a2a;color:#fff;
+      padding:12px 14px;border-radius:8px;font-size:1rem;outline:none;margin-bottom:14px}
+input:focus{border-color:#22c55e}
+button{width:100%;background:#22c55e;color:#000;border:none;padding:12px;
+       border-radius:8px;font-size:1rem;font-weight:700;cursor:pointer}
+button:hover{background:#16a34a}</style></head>
+<body><div class="card">
+<h1>CallBuddy</h1><p class="sub">Enter password to continue</p>
+<!--ERROR-->
+<form method="POST" action="/login">
+<input type="password" name="password" placeholder="Password" autofocus autocomplete="current-password"/>
+<button type="submit">Sign in</button>
+</form></div></body></html>`;
+
 const app = express();
+app.set("trust proxy", 1);
+
+app.use(helmet({
+  contentSecurityPolicy: { directives: {
+    defaultSrc: ["'self'"], scriptSrc: ["'self'", "'unsafe-inline'"],
+    styleSrc: ["'self'", "'unsafe-inline'"], imgSrc: ["'self'", "data:"],
+    connectSrc: ["'self'"], frameSrc: ["'none'"], objectSrc: ["'none'"],
+    scriptSrcAttr: ["'unsafe-inline'"],
+  }},
+}));
+
+const generalLimiter = rateLimit({ windowMs: 60_000, max: 120 });
+app.use(generalLimiter);
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
+app.use(session({
+  secret: config.auth.sessionSecret,
+  name: "buddy.sid",
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    httpOnly: true, sameSite: "strict",
+    secure: process.env.NODE_ENV === "production",
+    maxAge: 24 * 60 * 60 * 1000,
+  },
+}));
+
+// Auth routes (exempt from requireAuth)
+app.get("/login", (req: Request, res: Response) => {
+  if (req.session.authenticated) return void res.redirect("/");
+  res.type("text/html").send(LOGIN_HTML);
+});
+app.post("/login", (req: Request, res: Response) => {
+  const { password } = req.body as { password?: string };
+  if (password === config.auth.adminPassword) {
+    req.session.authenticated = true;
+    req.session.save(() => res.redirect("/"));
+  } else {
+    res.type("text/html").send(LOGIN_HTML.replace("<!--ERROR-->",
+      '<p style="color:#ef4444;text-align:center;margin-bottom:12px;font-size:.85rem">Incorrect password</p>'
+    ));
+  }
+});
+app.get("/logout", (req: Request, res: Response) => { req.session.destroy(() => res.redirect("/login")); });
+
+// Health check (exempt from auth — Azure health probe)
+app.get("/health", (_req: Request, res: Response) => res.json({ ok: true }));
+
 // Mobile control UI
-app.get("/", (_req: Request, res: Response) => res.type("text/html").send(HTML));
+app.get("/", requireAuth, (_req: Request, res: Response) => res.type("text/html").send(HTML));
 
 // Live log stream (SSE)
-app.get("/logs", (req: Request, res: Response) => {
+app.get("/logs", requireAuth, (req: Request, res: Response) => {
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
@@ -202,11 +276,8 @@ app.get("/logs", (req: Request, res: Response) => {
   req.on("close", () => sseClients.delete(res));
 });
 
-// Health check
-app.get("/health", (_req: Request, res: Response) => res.json({ ok: true }));
-
-// Latency data — read by BatraIndustries analytics
-app.get("/api/latency", (_req: Request, res: Response) => {
+// Latency data — read by BatraIndustries analytics (session OR Bearer)
+app.get("/api/latency", requireAuth, (_req: Request, res: Response) => {
   if (!existsSync(LATENCY_CSV)) return res.json([]);
   const lines = readFileSync(LATENCY_CSV, "utf8").trim().split("\n").slice(1);
   const rows = lines.map(line => {

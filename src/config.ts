@@ -27,4 +27,10 @@ export const config = {
   cartesia: {
     apiKey: require_env("CARTESIA_API_KEY"),
   },
+
+  auth: {
+    adminPassword: require_env("ADMIN_PASSWORD"),
+    sessionSecret: require_env("SESSION_SECRET"),
+    internalApiKey: require_env("INTERNAL_API_KEY"),
+  },
 } as const;
