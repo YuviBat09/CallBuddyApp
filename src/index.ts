@@ -168,7 +168,7 @@ const HTML = `<!DOCTYPE html>
       const now = new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
       const div = document.createElement('div');
       div.className = 'call-divider';
-      div.innerHTML = '<div class="call-divider-line"></div><div class="call-divider-label">Call ' + short + ' \u00B7 ' + now + '</div><div class="call-divider-line"></div>';
+      div.innerHTML = '<div class="call-divider-line"></div><div class="call-divider-label">Call ' + escHtml(short) + ' \u00B7 ' + now + '</div><div class="call-divider-line"></div>';
       convPane.appendChild(div);
     }
 
@@ -227,6 +227,13 @@ app.use(helmet({
 const generalLimiter = rateLimit({ windowMs: 60_000, max: 120 });
 app.use(generalLimiter);
 
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  skipSuccessfulRequests: true,
+  message: { error: "Too many login attempts, try again in 15 minutes" },
+});
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
@@ -247,7 +254,7 @@ app.get("/login", (req: Request, res: Response) => {
   if (req.session.authenticated) return void res.redirect("/");
   res.type("text/html").send(LOGIN_HTML);
 });
-app.post("/login", (req: Request, res: Response) => {
+app.post("/login", loginLimiter, (req: Request, res: Response) => {
   const { password } = req.body as { password?: string };
   if (password === config.auth.adminPassword) {
     req.session.authenticated = true;
