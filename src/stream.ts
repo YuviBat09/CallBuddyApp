@@ -5,7 +5,7 @@ import { LLM } from "./llm.js";
 import { CartesiaSession } from "./tts.js";
 
 const CSV_PATH = "./latency.csv";
-const LLM_MODEL = "groq-llama-3.3-70b";
+const LLM_MODEL = "groq-llama-3.1-8b-instant";
 
 if (!existsSync(CSV_PATH)) {
   appendFileSync(CSV_PATH,

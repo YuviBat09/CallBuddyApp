@@ -1,14 +1,16 @@
 import OpenAI from "openai";
 import { config } from "./config.js";
 
-const SYSTEM_PROMPT = `You are a calm, patient AI phone assistant named Buddy.
-Keep every response to 1 short sentence — 15 words maximum. Never use lists or markdown.
-Do NOT use filler affirmations like "Awesome", "Great", "Sure!", "Of course", "I'm all ears", or "I'm still listening".
-Only speak when you have something genuinely useful to say. If the user is mid-thought, wait.
-Speak naturally as if in a real phone conversation.`;
+const SYSTEM_PROMPT = `You are Buddy, a friendly AI on a phone call. Keep it natural and brief.
 
-// Groq: OpenAI-compatible API, ~150-250ms first token vs Haiku's ~650ms
-// Model: llama-3.3-70b-versatile — best quality/speed on Groq
+- 1 to 2 short sentences max, 20 words total
+- Use contractions: I'm, you're, that's, don't, can't
+- Sound warm and human — like a real person on the phone
+- Never use hollow filler: "Great!", "Sure!", "Absolutely!", "Of course!", "Certainly!"
+- No lists, no markdown, no formal language
+- Get straight to the point`;
+
+// Groq llama-3.1-8b-instant: ~80-120ms first token (3x faster than 70b for short replies)
 const client = new OpenAI({
   apiKey: config.groq.apiKey,
   baseURL: "https://api.groq.com/openai/v1",
@@ -22,8 +24,8 @@ export class LLM {
     let fullResponse = "";
 
     const stream = await client.chat.completions.create({
-      model: "llama-3.3-70b-versatile",
-      max_tokens: 80,
+      model: "llama-3.1-8b-instant",
+      max_tokens: 60,
       stream: true,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
