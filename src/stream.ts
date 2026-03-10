@@ -3,6 +3,7 @@ import { appendFileSync, existsSync } from "fs";
 import { STT } from "./stt.js";
 import { LLM } from "./llm.js";
 import { CartesiaSession } from "./tts.js";
+import { handleLightInstruction } from "./hue.js";
 
 const CSV_PATH = "./latency.csv";
 const LLM_MODEL = "groq-llama-3.1-8b-instant";
@@ -112,7 +113,13 @@ export function handleMediaStream(ws: WebSocket) {
       isResponding = false;
 
       const instruction = parseInstruction(text);
-      if (instruction) console.log(`[INSTRUCTION] ${callSid} "${instruction}"`);
+      if (instruction) {
+        console.log(`[INSTRUCTION] ${callSid} "${instruction}"`);
+        // Fire Hue control asynchronously — don't block or await
+        void handleLightInstruction(instruction).then((result) => {
+          if (result) console.log(`[HUE] Done: ${result}`);
+        });
+      }
     }
   });
 

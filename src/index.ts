@@ -9,6 +9,9 @@ import { config } from "./config.js";
 import { twilioRouter } from "./twilio.js";
 import { handleMediaStream } from "./stream.js";
 import { requireAuth } from "./auth.js";
+import {
+  getAuthUrl, exchangeCode, createBridgeUsername, getGroups, isConfigured,
+} from "./hue.js";
 
 const LATENCY_CSV = "./latency.csv";
 
@@ -301,6 +304,63 @@ app.get("/api/latency", requireAuth, (_req: Request, res: Response) => {
     };
   }).filter(r => r.timestamp);
   res.json(rows);
+});
+
+// ── Philips Hue OAuth setup routes (behind auth) ──────────────────────────────
+
+// Step 1: redirect to Hue login
+app.get("/hue/auth", requireAuth, (_req: Request, res: Response) => {
+  try {
+    res.redirect(getAuthUrl(config.serverUrl));
+  } catch (err) {
+    res.status(500).send(`<pre>Error: ${String(err)}\n\nMake sure HUE_CLIENT_ID is set.</pre>`);
+  }
+});
+
+// Step 2: Hue redirects back here with ?code=...
+app.get("/hue/callback", requireAuth, async (req: Request, res: Response) => {
+  const { code, error } = req.query as { code?: string; error?: string };
+
+  if (error || !code) {
+    return void res.status(400).send(`<pre>Hue OAuth error: ${error ?? "no code returned"}</pre>`);
+  }
+
+  try {
+    const { refreshToken } = await exchangeCode(code);
+    const username = await createBridgeUsername();
+
+    const instructions = `
+<h2>Hue connected!</h2>
+<p>Set these two env vars in your Azure App Service → Configuration → Application settings, then restart:</p>
+<pre>
+HUE_REFRESH_TOKEN=${refreshToken}
+HUE_BRIDGE_USERNAME=${username}
+</pre>
+<p>Once set, say <strong>"okay claude, turn on the lights"</strong> on a call to test.</p>
+<p><a href="/hue/status">Check status</a></p>`.trim();
+
+    res.type("text/html").send(instructions);
+  } catch (err) {
+    res.status(500).send(`<pre>Setup failed: ${String(err)}</pre>`);
+  }
+});
+
+// Status / diagnostic page
+app.get("/hue/status", requireAuth, async (_req: Request, res: Response) => {
+  if (!isConfigured()) {
+    return void res.type("text/html").send(
+      `<p>Hue not configured. <a href="/hue/auth">Connect Hue →</a></p>`
+    );
+  }
+  try {
+    const groups = await getGroups();
+    const list = Object.entries(groups)
+      .map(([id, g]) => `  ${id}: ${g.name} (${g.type})`)
+      .join("\n");
+    res.type("text/html").send(`<h2>Hue connected</h2><pre>Groups:\n${list}</pre>`);
+  } catch (err) {
+    res.status(500).send(`<pre>Hue error: ${String(err)}</pre>`);
+  }
 });
 
 // Twilio routes

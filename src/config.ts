@@ -33,4 +33,12 @@ export const config = {
     sessionSecret: require_env("SESSION_SECRET"),
     internalApiKey: require_env("INTERNAL_API_KEY"),
   },
+
+  // Philips Hue Remote API — all optional until configured via /hue/auth
+  hue: {
+    clientId:      process.env.HUE_CLIENT_ID      ?? "",
+    clientSecret:  process.env.HUE_CLIENT_SECRET   ?? "",
+    refreshToken:  process.env.HUE_REFRESH_TOKEN   ?? "",
+    bridgeUsername: process.env.HUE_BRIDGE_USERNAME ?? "",
+  },
 } as const;
